@@ -79,7 +79,7 @@ const VIGNETTE_IMAGE = "radial-gradient(ellipse at center, transparent 55%, rgba
 // Tela de vidro na paleta da marca (dourado suave + vinho).
 // O desfoque fica só nas bordas (máscara radial), então o centro continua nítido.
 const GLASS_BLUR = 18; // px. 0 desliga o desfoque (e o custo de GPU)
-const GLASS_STRENGTH = 1.6; // intensidade geral: 1 = sutil, 1.6 = visível, 2.5 = forte
+const GLASS_STRENGTH = 2.6; // intensidade geral: 1 = sutil, 1.6 = visível, 2.5 = forte
 const mix = (color: string, pct: number) =>
   `color-mix(in oklab, ${color} ${Math.min(100, pct * GLASS_STRENGTH).toFixed(1)}%, transparent)`;
 
