@@ -40,41 +40,61 @@ function ScrollHero() {
   useEffect(() => {
     const c = canvas.current!;
     const ctx = c.getContext("2d")!;
-    let current = -1;
-    const draw = (i: number) => {
-      const img = imgs.current[i];
-      if (!img || !img.complete || !img.naturalWidth) return;
-      const dpr = window.devicePixelRatio || 1;
-      const w = c.clientWidth, h = c.clientHeight;
-      if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
-      const s = Math.max(c.width / img.naturalWidth, c.height / img.naturalHeight);
-      const dw = img.naturalWidth * s, dh = img.naturalHeight * s;
-      ctx.drawImage(img, (c.width - dw) / 2, (c.height - dh) / 2, dw, dh);
-      current = i;
-    };
-    imgs.current = FRAMES.map((src, i) => {
+    imgs.current = FRAMES.map((src) => {
       const im = new Image();
+      im.decoding = "async";
       im.src = src;
-      im.onload = () => { if (i === 0 && current < 0) draw(0); };
       return im;
     });
-    let raf = 0;
-    const onScroll = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        const el = wrap.current!;
-        const total = el.offsetHeight - window.innerHeight;
-        const p = Math.min(1, Math.max(0, -el.getBoundingClientRect().top / total));
-        setProgress(p);
-        const idx = Math.round(p * (FRAMES.length - 1));
-        if (idx !== current) draw(idx);
-      });
+    const ready = (im?: HTMLImageElement) => !!im && im.complete && im.naturalWidth > 0;
+    const paint = (img: HTMLImageElement, alpha: number) => {
+      const s = Math.max(c.width / img.naturalWidth, c.height / img.naturalHeight);
+      const dw = img.naturalWidth * s, dh = img.naturalHeight * s;
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(img, (c.width - dw) / 2, (c.height - dh) / 2, dw, dh);
     };
-    const onResize = () => { c.width = 0; const i = current; current = -1; draw(Math.max(0, i)); };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onResize);
-    onScroll();
-    return () => { window.removeEventListener("scroll", onScroll); window.removeEventListener("resize", onResize); };
+    let target = 0, smooth = 0, lastDrawn = -1, raf = 0;
+    const measure = () => {
+      const el = wrap.current!;
+      const total = el.offsetHeight - window.innerHeight;
+      target = Math.min(1, Math.max(0, -el.getBoundingClientRect().top / total));
+    };
+    const resize = () => {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      c.width = c.clientWidth * dpr;
+      c.height = c.clientHeight * dpr;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      lastDrawn = -1;
+    };
+    const loop = () => {
+      smooth += (target - smooth) * 0.08;
+      if (Math.abs(target - smooth) < 0.0002) smooth = target;
+      const f = smooth * (FRAMES.length - 1);
+      if (Math.abs(f - lastDrawn) > 0.002) {
+        const i = Math.floor(f), t = f - i;
+        const a = imgs.current[i], b = imgs.current[Math.min(i + 1, FRAMES.length - 1)];
+        if (ready(a)) {
+          ctx.globalAlpha = 1;
+          paint(a!, 1);
+          if (t > 0.001 && ready(b)) paint(b!, t);
+          ctx.globalAlpha = 1;
+          lastDrawn = f;
+          setProgress(smooth);
+        }
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    resize();
+    measure();
+    window.addEventListener("scroll", measure, { passive: true });
+    window.addEventListener("resize", resize);
+    raf = requestAnimationFrame(loop);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("scroll", measure);
+      window.removeEventListener("resize", resize);
+    };
   }, []);
 
   const stage = Math.min(2, Math.floor(progress * 3));
