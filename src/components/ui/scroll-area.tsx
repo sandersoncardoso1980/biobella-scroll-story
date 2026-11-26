@@ -76,6 +76,23 @@ const GRAIN_TILE = 240; // tamanho do ladrilho do ruído, em px
 const GRAIN_IMAGE = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='${GRAIN_TILE}' height='${GRAIN_TILE}'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>")`;
 const VIGNETTE_IMAGE = "radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.28) 100%)";
 
+// Tela de vidro na paleta da marca (dourado suave + vinho).
+// O desfoque fica só nas bordas (máscara radial), então o centro continua nítido.
+const GLASS_BLUR = 14; // px. 0 desliga o desfoque (e o custo de GPU)
+const GLASS_TINT = [
+  "linear-gradient(135deg,",
+  "color-mix(in oklab, var(--gold-soft) 30%, transparent) 0%,",
+  "color-mix(in oklab, var(--primary) 6%, transparent) 55%,",
+  "color-mix(in oklab, var(--wine-deep) 22%, transparent) 100%)",
+].join(" ");
+const GLASS_SHEEN =
+  "linear-gradient(115deg, transparent 28%, color-mix(in oklab, white 20%, transparent) 40%, transparent 52%)";
+const GLASS_EDGE_MASK = "radial-gradient(ellipse at center, transparent 42%, black 100%)";
+const GLASS_BORDER = [
+  "inset 0 0 0 1px color-mix(in oklab, var(--gold) 40%, transparent)",
+  "inset 0 0 70px color-mix(in oklab, var(--gold-soft) 22%, transparent)",
+].join(", ");
+
 interface ScrollHeroProps {
   src?: string;
   className?: string;
@@ -252,6 +269,28 @@ export function ScrollHero({ src = heroVideoSrc, className, stages = STAGES }: S
             disablePictureInPicture
             controls={false}
             className="h-full w-full transform-gpu object-cover"
+          />
+
+          {/* Tela de vidro: bordas foscas, tom da paleta, brilho diagonal e filete dourado */}
+          {GLASS_BLUR > 0 && (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0"
+              style={{
+                backdropFilter: `blur(${GLASS_BLUR}px) saturate(1.15)`,
+                WebkitBackdropFilter: `blur(${GLASS_BLUR}px) saturate(1.15)`,
+                maskImage: GLASS_EDGE_MASK,
+                WebkitMaskImage: GLASS_EDGE_MASK,
+              }}
+            />
+          )}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0"
+            style={{
+              backgroundImage: `${GLASS_SHEEN}, ${GLASS_TINT}`,
+              boxShadow: GLASS_BORDER,
+            }}
           />
 
           {/* Grão de filme + vinheta (disfarça a baixa resolução) */}
