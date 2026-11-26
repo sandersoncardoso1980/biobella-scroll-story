@@ -100,7 +100,7 @@ function ScrollHero() {
   const stage = Math.min(2, Math.floor(progress * 3));
 
   return (
-    <section ref={wrap} className="relative h-[400vh]" id="inicio">
+    <section ref={wrap} className="relative h-[500vh]" id="inicio">
       <div className="sticky top-0 h-screen overflow-hidden bg-background">
         <div className="absolute inset-0 md:left-auto md:w-[52%]">
           <canvas ref={canvas} className="h-full w-full" />
