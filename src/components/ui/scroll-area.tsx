@@ -69,6 +69,13 @@ const VIDEO_FPS = 30;
 // Velocidade de suavização (maior = mais colado ao scroll, menor = mais "manteiga").
 const SMOOTHING = 10;
 
+// Grão de filme (ruído fino em escala de cinza) e vinheta sobre o vídeo.
+// Disfarçam a baixa resolução e dão um acabamento mais cinematográfico.
+const GRAIN_OPACITY = 0.5; // 0.3 = sutil, 0.7 = bem marcado
+const GRAIN_TILE = 240; // tamanho do ladrilho do ruído, em px
+const GRAIN_IMAGE = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='${GRAIN_TILE}' height='${GRAIN_TILE}'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>")`;
+const VIGNETTE_IMAGE = "radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.28) 100%)";
+
 interface ScrollHeroProps {
   src?: string;
   className?: string;
@@ -245,6 +252,22 @@ export function ScrollHero({ src = heroVideoSrc, className, stages = STAGES }: S
             disablePictureInPicture
             controls={false}
             className="h-full w-full transform-gpu object-cover"
+          />
+
+          {/* Grão de filme + vinheta (disfarça a baixa resolução) */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 mix-blend-overlay"
+            style={{
+              backgroundImage: GRAIN_IMAGE,
+              backgroundSize: `${GRAIN_TILE}px ${GRAIN_TILE}px`,
+              opacity: GRAIN_OPACITY,
+            }}
+          />
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0"
+            style={{ backgroundImage: VIGNETTE_IMAGE }}
           />
 
           {/* Gradiente de integração */}
