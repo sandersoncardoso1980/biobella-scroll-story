@@ -78,19 +78,26 @@ const VIGNETTE_IMAGE = "radial-gradient(ellipse at center, transparent 55%, rgba
 
 // Tela de vidro na paleta da marca (dourado suave + vinho).
 // O desfoque fica só nas bordas (máscara radial), então o centro continua nítido.
-const GLASS_BLUR = 14; // px. 0 desliga o desfoque (e o custo de GPU)
-const GLASS_TINT = [
-  "linear-gradient(135deg,",
-  "color-mix(in oklab, var(--gold-soft) 30%, transparent) 0%,",
-  "color-mix(in oklab, var(--primary) 6%, transparent) 55%,",
-  "color-mix(in oklab, var(--wine-deep) 22%, transparent) 100%)",
-].join(" ");
-const GLASS_SHEEN =
-  "linear-gradient(115deg, transparent 28%, color-mix(in oklab, white 20%, transparent) 40%, transparent 52%)";
-const GLASS_EDGE_MASK = "radial-gradient(ellipse at center, transparent 42%, black 100%)";
+const GLASS_BLUR = 18; // px. 0 desliga o desfoque (e o custo de GPU)
+const GLASS_STRENGTH = 1.6; // intensidade geral: 1 = sutil, 1.6 = visível, 2.5 = forte
+const mix = (color: string, pct: number) =>
+  `color-mix(in oklab, ${color} ${Math.min(100, pct * GLASS_STRENGTH).toFixed(1)}%, transparent)`;
+
+// Tinta do vidro: dourado suave no canto superior esquerdo, vinho no inferior direito.
+const GLASS_TINT = `linear-gradient(135deg, ${mix("var(--gold-soft)", 26)} 0%, ${mix("var(--primary)", 6)} 55%, ${mix("var(--wine-deep)", 20)} 100%)`;
+
+// Dois reflexos diagonais, como luz batendo numa lâmina de vidro.
+const GLASS_SHEEN = `linear-gradient(115deg, transparent 20%, ${mix("white", 13)} 30%, transparent 40%, transparent 58%, ${mix("white", 7)} 64%, transparent 72%)`;
+
+// Desfoque fosco só na moldura; o centro (rosto) permanece nítido.
+const GLASS_EDGE_MASK = "radial-gradient(ellipse at center, transparent 48%, black 95%)";
+
+// Bisel: filete dourado, brilho no canto superior esquerdo e sombra no inferior direito.
 const GLASS_BORDER = [
-  "inset 0 0 0 1px color-mix(in oklab, var(--gold) 40%, transparent)",
-  "inset 0 0 70px color-mix(in oklab, var(--gold-soft) 22%, transparent)",
+  `inset 0 0 0 2px ${mix("var(--gold)", 32)}`,
+  `inset 3px 3px 14px ${mix("white", 28)}`,
+  `inset -4px -4px 26px ${mix("var(--wine-deep)", 20)}`,
+  `inset 0 0 80px ${mix("var(--gold-soft)", 18)}`,
 ].join(", ");
 
 interface ScrollHeroProps {
