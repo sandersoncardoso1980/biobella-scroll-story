@@ -40,7 +40,28 @@ const STAGES: ScrollStage[] = [
     title: "Excelência",
     text: "Técnicas modernas e produtos de alta performance para a melhor experiência.",
   },
+  {
+    n: "06",
+    subtitle: "Escuta Atenta",
+    title: "Acolhimento",
+    text: "Cada consulta começa ouvindo seus objetivos, expectativas e ritmo.",
+  },
+  {
+    n: "07",
+    subtitle: "Proporção & Leveza",
+    title: "Naturalidade",
+    text: "Traços preservados sem excessos, valorizando a expressão autêntica do seu rosto.",
+  },
+  {
+    n: "08",
+    subtitle: "Acompanhamento Próximo",
+    title: "Cuidado",
+    text: "Orientação clara antes, durante e após cada procedimento para sua tranquilidade.",
+  },
 ];
+
+// A lista encerra antes do fim total do scroll para liberar o último frame sem texto.
+const TEXT_END_PROGRESS = 0.86;
 
 interface ScrollHeroProps {
   src?: string;
@@ -55,89 +76,96 @@ export function ScrollHero({
 }: ScrollHeroProps) {
   const wrapRef = React.useRef<HTMLDivElement | null>(null);
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
-  const rafRef = React.useRef<number | null>(null);
-  const durationRef = React.useRef<number>(0);
-  const lastSeekTimeRef = React.useRef<number>(-1);
   const [progress, setProgress] = React.useState(0);
 
   React.useEffect(() => {
     const video = videoRef.current;
-    if (!video) return;
+    const section = wrapRef.current;
 
+    if (!video || !section) return;
+
+    let frameId: number | null = null;
+    let previousProgress = -1;
+    let previousTime = -1;
+
+    // O vídeo será controlado exclusivamente pelo scroll.
+    video.pause();
     video.muted = true;
     video.playsInline = true;
-    video.pause();
 
-    const updateFromScroll = () => {
-      rafRef.current = null;
-      const el = wrapRef.current;
-      const vid = videoRef.current;
-      if (!el || !vid) return;
+    const update = () => {
+      frameId = null;
 
-      const scrollable = el.offsetHeight - window.innerHeight;
-      if (scrollable <= 0) return;
+      const rect = section.getBoundingClientRect();
+      const totalDistance = section.offsetHeight - window.innerHeight;
 
-      const raw = -el.getBoundingClientRect().top / scrollable;
-      const clamped = Math.min(1, Math.max(0, raw));
+      const nextProgress =
+        totalDistance > 0
+          ? Math.min(1, Math.max(0, -rect.top / totalDistance))
+          : 0;
 
-      setProgress((prev) => (Math.abs(prev - clamped) > 0.003 || clamped === 0 || clamped === 1 ? clamped : prev));
+      // 1. Atualização dos textos
+      if (Math.abs(nextProgress - previousProgress) >= 0.0005) {
+        previousProgress = nextProgress;
+        setProgress(nextProgress);
+      }
 
-      const duration = durationRef.current || (Number.isFinite(vid.duration) ? vid.duration : 0);
-      if (duration > 0 && vid.readyState >= 2 && !vid.seeking) {
-        const targetTime = clamped * duration;
-        if (Math.abs(targetTime - lastSeekTimeRef.current) >= 0.08) {
-          lastSeekTimeRef.current = targetTime;
-          try {
-            vid.currentTime = targetTime;
-          } catch {
-            // Ignora falhas transitórias de seek durante transições de estado no mobile
-          }
+      // 2. Atualização do vídeo
+      if (video.readyState >= 1 && video.duration > 0) {
+        const target = nextProgress * video.duration;
+
+        if (Math.abs(target - previousTime) >= 0.04) {
+          previousTime = target;
+
+          video.currentTime = Math.min(
+            target,
+            Math.max(0, video.duration - 0.01)
+          );
         }
       }
     };
 
-    const scheduleUpdate = () => {
-      if (rafRef.current === null) {
-        rafRef.current = requestAnimationFrame(updateFromScroll);
+    const onScroll = () => {
+      if (frameId === null) {
+        frameId = requestAnimationFrame(update);
       }
     };
 
-    const onLoadedMetadata = () => {
-      durationRef.current = Number.isFinite(video.duration) ? video.duration : 0;
-      scheduleUpdate();
-    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll, { passive: true });
 
-    const onCanPlay = () => {
-      scheduleUpdate();
-    };
+    video.addEventListener("loadedmetadata", onScroll);
+    video.addEventListener("loadeddata", onScroll);
+    video.addEventListener("canplay", onScroll);
 
-    video.addEventListener("loadedmetadata", onLoadedMetadata);
-    video.addEventListener("canplay", onCanPlay);
-    if (video.readyState >= 1) {
-      onLoadedMetadata();
-    }
-
-    window.addEventListener("scroll", scheduleUpdate, { passive: true });
-    window.addEventListener("resize", scheduleUpdate, { passive: true });
+    onScroll();
 
     return () => {
-      video.removeEventListener("loadedmetadata", onLoadedMetadata);
-      video.removeEventListener("canplay", onCanPlay);
-      window.removeEventListener("scroll", scheduleUpdate);
-      window.removeEventListener("resize", scheduleUpdate);
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+
+      video.removeEventListener("loadedmetadata", onScroll);
+      video.removeEventListener("loadeddata", onScroll);
+      video.removeEventListener("canplay", onScroll);
+
+      if (frameId !== null) {
+        cancelAnimationFrame(frameId);
       }
     };
   }, [src]);
 
   const totalStages = stages.length;
-  const isFinished = progress >= 0.995;
+  const textProgress = Math.min(1, Math.max(0, progress / TEXT_END_PROGRESS));
+  const isTextHidden = progress >= TEXT_END_PROGRESS;
   const activeStage =
-    totalStages > 0 ? Math.min(totalStages - 1, Math.floor(progress * totalStages)) : 0;
+    totalStages > 0 ? Math.min(totalStages - 1, Math.floor(textProgress * totalStages)) : 0;
 
   return (
-    <section ref={wrapRef} className={cn("relative h-[550vh] md:h-[650vh]", className)} id="inicio">
+    <section
+      ref={wrapRef}
+      className={cn("relative h-[650vh] md:h-[750vh]", className)}
+      id="inicio"
+    >
       <div className="sticky top-0 h-screen overflow-hidden bg-background">
         <div className="absolute inset-0 md:left-auto md:w-[52%]">
           <video
@@ -147,23 +175,24 @@ export function ScrollHero({
             playsInline
             preload="auto"
             disablePictureInPicture
+            controls={false}
             className="h-full w-full object-cover"
           />
           <div
             className={cn(
-              "absolute inset-0 transition-opacity duration-500 bg-gradient-to-t from-background via-background/10 to-transparent md:bg-gradient-to-r md:from-background md:via-transparent",
-              isFinished ? "opacity-30 md:opacity-0" : "opacity-100"
+              "pointer-events-none absolute inset-0 bg-gradient-to-t from-background via-background/10 to-transparent transition-opacity duration-300 md:bg-gradient-to-r md:from-background md:via-transparent",
+              isTextHidden ? "opacity-0" : "opacity-100"
             )}
           />
         </div>
 
         <div
-          aria-hidden={isFinished}
+          aria-hidden={isTextHidden}
           className={cn(
-            "relative z-10 flex h-full flex-col justify-end px-6 pb-24 transition-all duration-500 md:w-1/2 md:justify-center md:px-16",
-            isFinished
-              ? "pointer-events-none -translate-y-6 opacity-0"
-              : "pointer-events-auto translate-y-0 opacity-100"
+            "relative z-10 flex h-full flex-col justify-end px-6 pb-24 transition-all duration-300 md:w-1/2 md:justify-center md:px-16",
+            isTextHidden
+              ? "pointer-events-none invisible -translate-y-4 opacity-0"
+              : "pointer-events-auto visible translate-y-0 opacity-100"
           )}
         >
           <p className="mb-6 font-sans text-xs uppercase tracking-luxe text-gold">
@@ -172,18 +201,18 @@ export function ScrollHero({
 
           <div className="relative min-h-[14rem] md:min-h-[16rem]">
             {stages.map((s, i) => {
-              const isActive = !isFinished && activeStage === i;
+              const isActive = !isTextHidden && activeStage === i;
               return (
                 <div
                   key={s.n}
                   aria-hidden={!isActive}
                   className={cn(
-                    "absolute inset-0 transition-all duration-700",
-                    isActive ? "pointer-events-auto" : "pointer-events-none"
+                    "absolute inset-0 transition-all duration-500",
+                    isActive ? "visible pointer-events-auto" : "invisible pointer-events-none"
                   )}
                   style={{
                     opacity: isActive ? 1 : 0,
-                    transform: `translateY(${(i - activeStage) * 28}px)`,
+                    transform: `translateY(${(i - activeStage) * 24}px)`,
                   }}
                 >
                   <div className="flex items-center gap-3">
@@ -208,7 +237,10 @@ export function ScrollHero({
 
           <div className="mt-10 flex items-center gap-4">
             <div className="h-px w-48 bg-border">
-              <div className="h-px bg-gold-gradient" style={{ width: `${progress * 100}%` }} />
+              <div
+                className="h-px bg-gold-gradient"
+                style={{ width: `${textProgress * 100}%` }}
+              />
             </div>
             <span className="font-sans text-[11px] tracking-luxe text-muted-foreground">
               {String(activeStage + 1).padStart(2, "0")} / {String(totalStages).padStart(2, "0")}
@@ -217,8 +249,8 @@ export function ScrollHero({
         </div>
 
         <div
-          className="absolute bottom-6 left-1/2 z-10 -translate-x-1/2 font-sans text-[10px] uppercase tracking-luxe text-muted-foreground"
-          style={{ opacity: isFinished ? 0 : Math.max(0, 1 - progress * 4) }}
+          className="pointer-events-none absolute bottom-6 left-1/2 z-10 -translate-x-1/2 font-sans text-[10px] uppercase tracking-luxe text-muted-foreground"
+          style={{ opacity: isTextHidden ? 0 : Math.max(0, 1 - progress * 5) }}
         >
           Role para descobrir
         </div>
