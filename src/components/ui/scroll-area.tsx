@@ -57,68 +57,74 @@ export function ScrollHero({
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const rafRef = React.useRef<number | null>(null);
   const durationRef = React.useRef<number>(0);
-  const targetProgressRef = React.useRef<number>(0);
-  const smoothProgressRef = React.useRef<number>(0);
+  const lastSeekTimeRef = React.useRef<number>(-1);
   const [progress, setProgress] = React.useState(0);
 
   React.useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    const handleLoadedMetadata = () => {
-      durationRef.current = Number.isFinite(video.duration) ? video.duration : 0;
-      measure();
-    };
+    video.muted = true;
+    video.playsInline = true;
+    video.pause();
 
-    const measure = () => {
+    const updateFromScroll = () => {
+      rafRef.current = null;
       const el = wrapRef.current;
-      if (!el) return;
+      const vid = videoRef.current;
+      if (!el || !vid) return;
+
       const scrollable = el.offsetHeight - window.innerHeight;
-      if (scrollable <= 0) {
-        targetProgressRef.current = 0;
-        return;
-      }
+      if (scrollable <= 0) return;
+
       const raw = -el.getBoundingClientRect().top / scrollable;
-      targetProgressRef.current = Math.min(1, Math.max(0, raw));
-    };
+      const clamped = Math.min(1, Math.max(0, raw));
 
-    const tick = () => {
-      const target = targetProgressRef.current;
-      let smooth = smoothProgressRef.current;
-      smooth += (target - smooth) * 0.12;
-      if (Math.abs(target - smooth) < 0.0005) {
-        smooth = target;
-      }
-      smoothProgressRef.current = smooth;
+      setProgress((prev) => (Math.abs(prev - clamped) > 0.003 || clamped === 0 || clamped === 1 ? clamped : prev));
 
-      const currentVideo = videoRef.current;
-      const duration = durationRef.current;
-      if (currentVideo && duration > 0 && currentVideo.readyState >= 1) {
-        const targetTime = smooth * duration;
-        if (Math.abs(currentVideo.currentTime - targetTime) > 0.015) {
-          currentVideo.currentTime = targetTime;
+      const duration = durationRef.current || (Number.isFinite(vid.duration) ? vid.duration : 0);
+      if (duration > 0 && vid.readyState >= 2 && !vid.seeking) {
+        const targetTime = clamped * duration;
+        if (Math.abs(targetTime - lastSeekTimeRef.current) >= 0.08) {
+          lastSeekTimeRef.current = targetTime;
+          try {
+            vid.currentTime = targetTime;
+          } catch {
+            // Ignora falhas transitórias de seek durante transições de estado no mobile
+          }
         }
       }
-
-      setProgress((prev) =>
-        Math.abs(prev - smooth) > 0.002 || smooth === 0 || smooth === 1 ? smooth : prev
-      );
-      rafRef.current = requestAnimationFrame(tick);
     };
 
-    video.addEventListener("loadedmetadata", handleLoadedMetadata);
+    const scheduleUpdate = () => {
+      if (rafRef.current === null) {
+        rafRef.current = requestAnimationFrame(updateFromScroll);
+      }
+    };
+
+    const onLoadedMetadata = () => {
+      durationRef.current = Number.isFinite(video.duration) ? video.duration : 0;
+      scheduleUpdate();
+    };
+
+    const onCanPlay = () => {
+      scheduleUpdate();
+    };
+
+    video.addEventListener("loadedmetadata", onLoadedMetadata);
+    video.addEventListener("canplay", onCanPlay);
     if (video.readyState >= 1) {
-      handleLoadedMetadata();
+      onLoadedMetadata();
     }
 
-    window.addEventListener("scroll", measure, { passive: true });
-    window.addEventListener("resize", measure, { passive: true });
-    rafRef.current = requestAnimationFrame(tick);
+    window.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate, { passive: true });
 
     return () => {
-      video.removeEventListener("loadedmetadata", handleLoadedMetadata);
-      window.removeEventListener("scroll", measure);
-      window.removeEventListener("resize", measure);
+      video.removeEventListener("loadedmetadata", onLoadedMetadata);
+      video.removeEventListener("canplay", onCanPlay);
+      window.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
       if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current);
       }
@@ -131,7 +137,7 @@ export function ScrollHero({
     totalStages > 0 ? Math.min(totalStages - 1, Math.floor(progress * totalStages)) : 0;
 
   return (
-    <section ref={wrapRef} className={cn("relative h-[650vh]", className)} id="inicio">
+    <section ref={wrapRef} className={cn("relative h-[550vh] md:h-[650vh]", className)} id="inicio">
       <div className="sticky top-0 h-screen overflow-hidden bg-background">
         <div className="absolute inset-0 md:left-auto md:w-[52%]">
           <video
@@ -140,6 +146,7 @@ export function ScrollHero({
             muted
             playsInline
             preload="auto"
+            disablePictureInPicture
             className="h-full w-full object-cover"
           />
           <div
