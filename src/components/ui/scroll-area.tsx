@@ -1,3 +1,4 @@
+
 import * as React from "react";
 import heroVideoSrc from "@/assets/frames/12772a07.mp4";
 import { cn } from "@/lib/utils";
@@ -60,8 +61,8 @@ const STAGES: ScrollStage[] = [
   },
 ];
 
-// A lista encerra antes do fim total do scroll para liberar o último frame sem texto.
 const TEXT_END_PROGRESS = 0.86;
+const SEEK_THRESHOLD = 0.035;
 
 interface ScrollHeroProps {
   src?: string;
@@ -74,9 +75,18 @@ export function ScrollHero({
   className,
   stages = STAGES,
 }: ScrollHeroProps) {
-  const wrapRef = React.useRef<HTMLDivElement | null>(null);
+  const wrapRef = React.useRef<HTMLElement | null>(null);
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
-  const [progress, setProgress] = React.useState(0);
+
+  const progressBarRef = React.useRef<HTMLDivElement | null>(null);
+  const scrollHintRef = React.useRef<HTMLDivElement | null>(null);
+
+  const frameRef = React.useRef<number | null>(null);
+  const pendingTimeRef = React.useRef(0);
+  const lastRequestedTimeRef = React.useRef(-1);
+
+  const [activeStage, setActiveStage] = React.useState(0);
+  const [isTextHidden, setIsTextHidden] = React.useState(false);
 
   React.useEffect(() => {
     const video = videoRef.current;
@@ -84,89 +94,184 @@ export function ScrollHero({
 
     if (!video || !section) return;
 
-    let frameId: number | null = null;
-    let previousProgress = -1;
-    let previousTime = -1;
+    let animationFrame: number | null = null;
 
-    // O vídeo será controlado exclusivamente pelo scroll.
+    // O vídeo não reproduz sozinho.
     video.pause();
     video.muted = true;
     video.playsInline = true;
 
+    // Executa somente o seek mais recente.
+    const applyLatestSeek = () => {
+      if (
+        !Number.isFinite(video.duration) ||
+        video.duration <= 0 ||
+        video.readyState < 1 ||
+        video.seeking
+      ) {
+        return;
+      }
+
+      const target = pendingTimeRef.current;
+
+      // Evita solicitações redundantes.
+      if (
+        Math.abs(target - video.currentTime) < SEEK_THRESHOLD
+      ) {
+        return;
+      }
+
+      if (
+        Math.abs(target - lastRequestedTimeRef.current) <
+        SEEK_THRESHOLD
+      ) {
+        return;
+      }
+
+      try {
+        lastRequestedTimeRef.current = target;
+        video.currentTime = target;
+      } catch {
+        lastRequestedTimeRef.current = -1;
+      }
+    };
+
+    // Calcula o progresso da página.
     const update = () => {
-      frameId = null;
+      animationFrame = null;
 
       const rect = section.getBoundingClientRect();
-      const totalDistance = section.offsetHeight - window.innerHeight;
 
-      const nextProgress =
-        totalDistance > 0
-          ? Math.min(1, Math.max(0, -rect.top / totalDistance))
+      const scrollDistance =
+        section.offsetHeight - window.innerHeight;
+
+      const progress =
+        scrollDistance > 0
+          ? Math.min(1, Math.max(0, -rect.top / scrollDistance))
           : 0;
 
-      // 1. Atualização dos textos
-      if (Math.abs(nextProgress - previousProgress) >= 0.0005) {
-        previousProgress = nextProgress;
-        setProgress(nextProgress);
+      // Calcula o estágio ativo.
+      const totalStages = stages.length;
+
+      const textProgress = Math.min(
+        1,
+        progress / TEXT_END_PROGRESS
+      );
+
+      const nextStage =
+        totalStages > 0
+          ? Math.min(
+              totalStages - 1,
+              Math.floor(textProgress * totalStages)
+            )
+          : 0;
+
+      // React só atualiza quando o estágio realmente muda.
+      setActiveStage(nextStage);
+
+      // Esconde os textos depois do último estágio.
+      const hidden = progress >= TEXT_END_PROGRESS;
+
+      setIsTextHidden(hidden);
+
+      // Atualiza a barra sem renderização React.
+      if (progressBarRef.current) {
+        progressBarRef.current.style.transform =
+          `scaleX(${textProgress})`;
       }
 
-      // 2. Atualização do vídeo
-      if (video.readyState >= 1 && video.duration > 0) {
-        const target = nextProgress * video.duration;
+      // Atualiza a indicação de scroll diretamente.
+      if (scrollHintRef.current) {
+        scrollHintRef.current.style.opacity = String(
+          hidden ? 0 : Math.max(0, 1 - progress * 5)
+        );
+      }
 
-        if (Math.abs(target - previousTime) >= 0.04) {
-          previousTime = target;
+      // Calcula o instante correspondente do vídeo.
+      if (
+        Number.isFinite(video.duration) &&
+        video.duration > 0
+      ) {
+        const target = Math.min(
+          progress * video.duration,
+          Math.max(0, video.duration - 0.04)
+        );
 
-          video.currentTime = Math.min(
-            target,
-            Math.max(0, video.duration - 0.01)
-          );
-        }
+        // Guarda sempre a posição mais recente.
+        pendingTimeRef.current = target;
+
+        applyLatestSeek();
       }
     };
 
-    const onScroll = () => {
-      if (frameId === null) {
-        frameId = requestAnimationFrame(update);
+    // Limita os cálculos a um ciclo por frame.
+    const scheduleUpdate = () => {
+      if (animationFrame === null) {
+        animationFrame = requestAnimationFrame(update);
       }
     };
 
-    window.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onScroll, { passive: true });
+    // Quando um seek termina, aplica somente o destino mais recente.
+    const handleSeeked = () => {
+      applyLatestSeek();
+    };
 
-    video.addEventListener("loadedmetadata", onScroll);
-    video.addEventListener("loadeddata", onScroll);
-    video.addEventListener("canplay", onScroll);
+    // Eventos da página.
+    window.addEventListener("scroll", scheduleUpdate, {
+      passive: true,
+    });
 
-    onScroll();
+    window.addEventListener("resize", scheduleUpdate, {
+      passive: true,
+    });
+
+    // Eventos do vídeo.
+    video.addEventListener("loadedmetadata", scheduleUpdate);
+    video.addEventListener("loadeddata", scheduleUpdate);
+    video.addEventListener("canplay", scheduleUpdate);
+    video.addEventListener("seeked", handleSeeked);
+
+    // Sincronização inicial.
+    scheduleUpdate();
 
     return () => {
-      window.removeEventListener("scroll", onScroll);
-      window.removeEventListener("resize", onScroll);
+      window.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
 
-      video.removeEventListener("loadedmetadata", onScroll);
-      video.removeEventListener("loadeddata", onScroll);
-      video.removeEventListener("canplay", onScroll);
+      video.removeEventListener("loadedmetadata", scheduleUpdate);
+      video.removeEventListener("loadeddata", scheduleUpdate);
+      video.removeEventListener("canplay", scheduleUpdate);
+      video.removeEventListener("seeked", handleSeeked);
 
-      if (frameId !== null) {
-        cancelAnimationFrame(frameId);
+      if (animationFrame !== null) {
+        cancelAnimationFrame(animationFrame);
+      }
+
+      if (frameRef.current !== null) {
+        cancelAnimationFrame(frameRef.current);
       }
     };
-  }, [src]);
+  }, [src, stages.length]);
 
   const totalStages = stages.length;
-  const textProgress = Math.min(1, Math.max(0, progress / TEXT_END_PROGRESS));
-  const isTextHidden = progress >= TEXT_END_PROGRESS;
-  const activeStage =
-    totalStages > 0 ? Math.min(totalStages - 1, Math.floor(textProgress * totalStages)) : 0;
+
+  const textProgress = Math.min(
+    1,
+    Math.max(0, activeStage / Math.max(totalStages, 1))
+  );
 
   return (
     <section
       ref={wrapRef}
-      className={cn("relative h-[650vh] md:h-[750vh]", className)}
+      className={cn(
+        "relative h-[650vh] md:h-[750vh]",
+        className
+      )}
       id="inicio"
     >
-      <div className="sticky top-0 h-screen overflow-hidden bg-background">
+      <div className="sticky top-0 h-screen w-full overflow-hidden bg-background">
+
+        {/* VÍDEO */}
         <div className="absolute inset-0 md:left-auto md:w-[52%]">
           <video
             ref={videoRef}
@@ -178,18 +283,26 @@ export function ScrollHero({
             controls={false}
             className="h-full w-full object-cover"
           />
+
+          {/* Gradiente de integração */}
           <div
             className={cn(
-              "pointer-events-none absolute inset-0 bg-gradient-to-t from-background via-background/10 to-transparent transition-opacity duration-300 md:bg-gradient-to-r md:from-background md:via-transparent",
+              "pointer-events-none absolute inset-0",
+              "bg-gradient-to-t from-background via-background/10 to-transparent",
+              "transition-opacity duration-300",
+              "md:bg-gradient-to-r md:from-background md:via-transparent",
               isTextHidden ? "opacity-0" : "opacity-100"
             )}
           />
         </div>
 
+        {/* CONTEÚDO TEXTUAL */}
         <div
-          aria-hidden={isTextHidden}
+          aria-hidden={isTextHidden || totalStages === 0}
           className={cn(
-            "relative z-10 flex h-full flex-col justify-end px-6 pb-24 transition-all duration-300 md:w-1/2 md:justify-center md:px-16",
+            "relative z-10 flex h-full flex-col justify-end",
+            "px-6 pb-24 transition-opacity duration-300",
+            "md:w-1/2 md:justify-center md:px-16",
             isTextHidden
               ? "pointer-events-none invisible -translate-y-4 opacity-0"
               : "pointer-events-auto visible translate-y-0 opacity-100"
@@ -199,58 +312,84 @@ export function ScrollHero({
             Clínica BioBella
           </p>
 
+          {/* ESTÁGIOS */}
           <div className="relative min-h-[14rem] md:min-h-[16rem]">
-            {stages.map((s, i) => {
-              const isActive = !isTextHidden && activeStage === i;
+            {stages.map((stage, index) => {
+              const isActive =
+                !isTextHidden && activeStage === index;
+
               return (
                 <div
-                  key={s.n}
+                  key={stage.n}
                   aria-hidden={!isActive}
                   className={cn(
                     "absolute inset-0 transition-all duration-500",
-                    isActive ? "visible pointer-events-auto" : "invisible pointer-events-none"
+                    isActive
+                      ? "visible pointer-events-auto"
+                      : "invisible pointer-events-none"
                   )}
                   style={{
                     opacity: isActive ? 1 : 0,
-                    transform: `translateY(${(i - activeStage) * 24}px)`,
+                    transform: `translate3d(0, ${
+                      (index - activeStage) * 24
+                    }px, 0)`,
                   }}
                 >
                   <div className="flex items-center gap-3">
-                    <span className="font-display text-lg text-gold">{s.n}</span>
+                    <span className="font-display text-lg text-gold">
+                      {stage.n}
+                    </span>
+
                     <span className="h-px w-8 bg-gold/40" />
+
                     <span className="font-sans text-xs uppercase tracking-luxe text-gold/90">
-                      {s.subtitle}
+                      {stage.subtitle}
                     </span>
                   </div>
 
                   <h1 className="mt-2 font-display text-5xl font-medium leading-none text-primary md:text-7xl">
-                    {s.title}
+                    {stage.title}
                   </h1>
 
                   <p className="mt-4 max-w-md font-sans font-light leading-relaxed text-muted-foreground">
-                    {s.text}
+                    {stage.text}
                   </p>
                 </div>
               );
             })}
           </div>
 
+          {/* BARRA DE PROGRESSO */}
           <div className="mt-10 flex items-center gap-4">
-            <div className="h-px w-48 bg-border">
+            <div className="h-px w-48 overflow-hidden bg-border">
               <div
-                className="h-px bg-gold-gradient"
-                style={{ width: `${textProgress * 100}%` }}
+                ref={progressBarRef}
+                className="h-px w-full origin-left bg-gold-gradient"
+                style={{
+                  transform: "scaleX(0)",
+                }}
               />
             </div>
+
             <span className="font-sans text-[11px] tracking-luxe text-muted-foreground">
-              {String(activeStage + 1).padStart(2, "0")} / {String(totalStages).padStart(2, "0")}
+              {String(
+                totalStages > 0 ? activeStage + 1 : 0
+              ).padStart(2, "0")}
+              {" / "}
+              {String(totalStages).padStart(2, "0")}
             </span>
           </div>
         </div>
 
+        {/* INDICAÇÃO DE SCROLL */}
         <div
-          className="pointer-events-none absolute bottom-6 left-1/2 z-10 -translate-x-1/2 font-sans text-[10px] uppercase tracking-luxe text-muted-foreground"
-          style={{ opacity: isTextHidden ? 0 : Math.max(0, 1 - progress * 5) }}
+          ref={scrollHintRef}
+          className={cn(
+            "pointer-events-none absolute bottom-6 left-1/2 z-10",
+            "-translate-x-1/2 font-sans text-[10px]",
+            "uppercase tracking-luxe text-muted-foreground"
+          )}
+          style={{ opacity: 1 }}
         >
           Role para descobrir
         </div>
