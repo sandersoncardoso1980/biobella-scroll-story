@@ -1,4 +1,3 @@
-
 import * as React from "react";
 import heroVideoSrc from "@/assets/frames/12772a07.mp4";
 import { cn } from "@/lib/utils";
@@ -62,7 +61,13 @@ const STAGES: ScrollStage[] = [
 ];
 
 const TEXT_END_PROGRESS = 0.86;
-const SEEK_THRESHOLD = 0.035;
+
+// O vídeo foi codificado com 30 fps e TODOS os frames como keyframe
+// (ffmpeg -g 1 -bf 0), então cada seek decodifica apenas 1 frame.
+const VIDEO_FPS = 30;
+
+// Velocidade de suavização (maior = mais colado ao scroll, menor = mais "manteiga").
+const SMOOTHING = 10;
 
 interface ScrollHeroProps {
   src?: string;
@@ -70,20 +75,12 @@ interface ScrollHeroProps {
   stages?: ScrollStage[];
 }
 
-export function ScrollHero({
-  src = heroVideoSrc,
-  className,
-  stages = STAGES,
-}: ScrollHeroProps) {
+export function ScrollHero({ src = heroVideoSrc, className, stages = STAGES }: ScrollHeroProps) {
   const wrapRef = React.useRef<HTMLElement | null>(null);
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
 
   const progressBarRef = React.useRef<HTMLDivElement | null>(null);
   const scrollHintRef = React.useRef<HTMLDivElement | null>(null);
-
-  const frameRef = React.useRef<number | null>(null);
-  const pendingTimeRef = React.useRef(0);
-  const lastRequestedTimeRef = React.useRef(-1);
 
   const [activeStage, setActiveStage] = React.useState(0);
   const [isTextHidden, setIsTextHidden] = React.useState(false);
@@ -94,194 +91,160 @@ export function ScrollHero({
 
     if (!video || !section) return;
 
-    let animationFrame: number | null = null;
+    let rafId: number | null = null;
+    let lastTick = 0;
+    let objectUrl: string | null = null;
+    let disposed = false;
 
-    // O vídeo não reproduz sozinho.
+    // Estado da animação (tudo em segundos de vídeo).
+    let targetTime = 0; // para onde o scroll quer ir
+    let smoothTime = 0; // posição suavizada (interpolada)
+    let shownFrame = -1; // último frame enviado ao decoder
+    let hasMetadata = false;
+
     video.pause();
     video.muted = true;
     video.playsInline = true;
 
-    // Executa somente o seek mais recente.
-    const applyLatestSeek = () => {
-      if (
-        !Number.isFinite(video.duration) ||
-        video.duration <= 0 ||
-        video.readyState < 1 ||
-        video.seeking
-      ) {
-        return;
+    const lastFrameIndex = () => Math.max(0, Math.floor(video.duration * VIDEO_FPS) - 1);
+
+    // Loop de animação: interpola suavemente até o alvo e troca de frame
+    // no máximo uma vez por seek concluído.
+    const tick = (now: number) => {
+      rafId = null;
+
+      const dt = lastTick ? Math.min(0.1, (now - lastTick) / 1000) : 1 / 60;
+      lastTick = now;
+
+      // Interpolação independente da taxa de atualização da tela.
+      const k = 1 - Math.exp(-SMOOTHING * dt);
+      smoothTime += (targetTime - smoothTime) * k;
+
+      // Encaixa no alvo quando já está a menos de ~1/4 de frame.
+      if (Math.abs(targetTime - smoothTime) < 0.25 / VIDEO_FPS) {
+        smoothTime = targetTime;
       }
 
-      const target = pendingTimeRef.current;
+      const wanted = Math.min(lastFrameIndex(), Math.max(0, Math.round(smoothTime * VIDEO_FPS)));
 
-      // Evita solicitações redundantes.
-      if (
-        Math.abs(target - video.currentTime) < SEEK_THRESHOLD
-      ) {
-        return;
+      if (wanted !== shownFrame && !video.seeking) {
+        shownFrame = wanted;
+        // +0.001 evita cair no frame anterior por arredondamento.
+        video.currentTime = wanted / VIDEO_FPS + 0.001;
       }
 
-      if (
-        Math.abs(target - lastRequestedTimeRef.current) <
-        SEEK_THRESHOLD
-      ) {
-        return;
-      }
-
-      try {
-        lastRequestedTimeRef.current = target;
-        video.currentTime = target;
-      } catch {
-        lastRequestedTimeRef.current = -1;
+      // Continua rodando enquanto houver movimento ou seek pendente.
+      if (smoothTime !== targetTime || wanted !== shownFrame || video.seeking) {
+        rafId = requestAnimationFrame(tick);
+      } else {
+        lastTick = 0;
       }
     };
 
-    // Calcula o progresso da página.
+    const ensureLoop = () => {
+      if (rafId === null && hasMetadata) {
+        rafId = requestAnimationFrame(tick);
+      }
+    };
+
+    // Lê o scroll, atualiza UI leve e define o novo alvo do vídeo.
     const update = () => {
-      animationFrame = null;
-
       const rect = section.getBoundingClientRect();
-
-      const scrollDistance =
-        section.offsetHeight - window.innerHeight;
+      const scrollDistance = section.offsetHeight - window.innerHeight;
 
       const progress =
-        scrollDistance > 0
-          ? Math.min(1, Math.max(0, -rect.top / scrollDistance))
-          : 0;
+        scrollDistance > 0 ? Math.min(1, Math.max(0, -rect.top / scrollDistance)) : 0;
 
-      // Calcula o estágio ativo.
       const totalStages = stages.length;
-
-      const textProgress = Math.min(
-        1,
-        progress / TEXT_END_PROGRESS
-      );
+      const textProgress = Math.min(1, progress / TEXT_END_PROGRESS);
 
       const nextStage =
-        totalStages > 0
-          ? Math.min(
-              totalStages - 1,
-              Math.floor(textProgress * totalStages)
-            )
-          : 0;
+        totalStages > 0 ? Math.min(totalStages - 1, Math.floor(textProgress * totalStages)) : 0;
 
-      // React só atualiza quando o estágio realmente muda.
       setActiveStage(nextStage);
 
-      // Esconde os textos depois do último estágio.
       const hidden = progress >= TEXT_END_PROGRESS;
-
       setIsTextHidden(hidden);
 
-      // Atualiza a barra sem renderização React.
       if (progressBarRef.current) {
-        progressBarRef.current.style.transform =
-          `scaleX(${textProgress})`;
+        progressBarRef.current.style.transform = `scaleX(${textProgress})`;
       }
 
-      // Atualiza a indicação de scroll diretamente.
       if (scrollHintRef.current) {
-        scrollHintRef.current.style.opacity = String(
-          hidden ? 0 : Math.max(0, 1 - progress * 5)
-        );
+        scrollHintRef.current.style.opacity = String(hidden ? 0 : Math.max(0, 1 - progress * 5));
       }
 
-      // Calcula o instante correspondente do vídeo.
-      if (
-        Number.isFinite(video.duration) &&
-        video.duration > 0
-      ) {
-        const target = Math.min(
-          progress * video.duration,
-          Math.max(0, video.duration - 0.04)
-        );
-
-        // Guarda sempre a posição mais recente.
-        pendingTimeRef.current = target;
-
-        applyLatestSeek();
+      if (hasMetadata && Number.isFinite(video.duration) && video.duration > 0) {
+        targetTime = (lastFrameIndex() / VIDEO_FPS) * progress;
+        ensureLoop();
       }
     };
 
-    // Limita os cálculos a um ciclo por frame.
-    const scheduleUpdate = () => {
-      if (animationFrame === null) {
-        animationFrame = requestAnimationFrame(update);
-      }
+    const handleMetadata = () => {
+      if (!Number.isFinite(video.duration) || video.duration <= 0) return;
+      hasMetadata = true;
+      update();
     };
 
-    // Quando um seek termina, aplica somente o destino mais recente.
     const handleSeeked = () => {
-      applyLatestSeek();
+      // Se o scroll andou durante o seek, envia o frame mais recente já.
+      ensureLoop();
     };
 
-    // Eventos da página.
-    window.addEventListener("scroll", scheduleUpdate, {
-      passive: true,
-    });
+    // Baixa o vídeo inteiro para memória: seeks passam a ser instantâneos,
+    // sem depender de requisições de rede (range requests) durante o scroll.
+    const loadVideo = async () => {
+      try {
+        const response = await fetch(src);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const blob = await response.blob();
+        if (disposed) return;
+        objectUrl = URL.createObjectURL(blob);
+        video.src = objectUrl;
+      } catch {
+        if (!disposed) video.src = src; // fallback: carregamento normal
+      }
+      video.load();
+    };
 
-    window.addEventListener("resize", scheduleUpdate, {
-      passive: true,
-    });
+    window.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update, { passive: true });
 
-    // Eventos do vídeo.
-    video.addEventListener("loadedmetadata", scheduleUpdate);
-    video.addEventListener("loadeddata", scheduleUpdate);
-    video.addEventListener("canplay", scheduleUpdate);
+    video.addEventListener("loadedmetadata", handleMetadata);
     video.addEventListener("seeked", handleSeeked);
 
-    // Sincronização inicial.
-    scheduleUpdate();
+    void loadVideo();
+    update();
 
     return () => {
-      window.removeEventListener("scroll", scheduleUpdate);
-      window.removeEventListener("resize", scheduleUpdate);
+      disposed = true;
 
-      video.removeEventListener("loadedmetadata", scheduleUpdate);
-      video.removeEventListener("loadeddata", scheduleUpdate);
-      video.removeEventListener("canplay", scheduleUpdate);
+      window.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+
+      video.removeEventListener("loadedmetadata", handleMetadata);
       video.removeEventListener("seeked", handleSeeked);
 
-      if (animationFrame !== null) {
-        cancelAnimationFrame(animationFrame);
-      }
-
-      if (frameRef.current !== null) {
-        cancelAnimationFrame(frameRef.current);
-      }
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [src, stages.length]);
 
   const totalStages = stages.length;
 
-  const textProgress = Math.min(
-    1,
-    Math.max(0, activeStage / Math.max(totalStages, 1))
-  );
-
   return (
-    <section
-      ref={wrapRef}
-      className={cn(
-        "relative h-[650vh] md:h-[750vh]",
-        className
-      )}
-      id="inicio"
-    >
+    <section ref={wrapRef} className={cn("relative h-[650vh] md:h-[750vh]", className)} id="inicio">
       <div className="sticky top-0 h-screen w-full overflow-hidden bg-background">
-
         {/* VÍDEO */}
         <div className="absolute inset-0 md:left-auto md:w-[52%]">
           <video
             ref={videoRef}
-            src={src}
             muted
             playsInline
             preload="auto"
             disablePictureInPicture
             controls={false}
-            className="h-full w-full object-cover"
+            className="h-full w-full transform-gpu object-cover"
           />
 
           {/* Gradiente de integração */}
@@ -291,7 +254,7 @@ export function ScrollHero({
               "bg-gradient-to-t from-background via-background/10 to-transparent",
               "transition-opacity duration-300",
               "md:bg-gradient-to-r md:from-background md:via-transparent",
-              isTextHidden ? "opacity-0" : "opacity-100"
+              isTextHidden ? "opacity-0" : "opacity-100",
             )}
           />
         </div>
@@ -305,7 +268,7 @@ export function ScrollHero({
             "md:w-1/2 md:justify-center md:px-16",
             isTextHidden
               ? "pointer-events-none invisible -translate-y-4 opacity-0"
-              : "pointer-events-auto visible translate-y-0 opacity-100"
+              : "pointer-events-auto visible translate-y-0 opacity-100",
           )}
         >
           <p className="mb-6 font-sans text-xs uppercase tracking-luxe text-gold">
@@ -315,8 +278,7 @@ export function ScrollHero({
           {/* ESTÁGIOS */}
           <div className="relative min-h-[14rem] md:min-h-[16rem]">
             {stages.map((stage, index) => {
-              const isActive =
-                !isTextHidden && activeStage === index;
+              const isActive = !isTextHidden && activeStage === index;
 
               return (
                 <div
@@ -324,21 +286,15 @@ export function ScrollHero({
                   aria-hidden={!isActive}
                   className={cn(
                     "absolute inset-0 transition-all duration-500",
-                    isActive
-                      ? "visible pointer-events-auto"
-                      : "invisible pointer-events-none"
+                    isActive ? "visible pointer-events-auto" : "invisible pointer-events-none",
                   )}
                   style={{
                     opacity: isActive ? 1 : 0,
-                    transform: `translate3d(0, ${
-                      (index - activeStage) * 24
-                    }px, 0)`,
+                    transform: `translate3d(0, ${(index - activeStage) * 24}px, 0)`,
                   }}
                 >
                   <div className="flex items-center gap-3">
-                    <span className="font-display text-lg text-gold">
-                      {stage.n}
-                    </span>
+                    <span className="font-display text-lg text-gold">{stage.n}</span>
 
                     <span className="h-px w-8 bg-gold/40" />
 
@@ -372,9 +328,7 @@ export function ScrollHero({
             </div>
 
             <span className="font-sans text-[11px] tracking-luxe text-muted-foreground">
-              {String(
-                totalStages > 0 ? activeStage + 1 : 0
-              ).padStart(2, "0")}
+              {String(totalStages > 0 ? activeStage + 1 : 0).padStart(2, "0")}
               {" / "}
               {String(totalStages).padStart(2, "0")}
             </span>
@@ -387,7 +341,7 @@ export function ScrollHero({
           className={cn(
             "pointer-events-none absolute bottom-6 left-1/2 z-10",
             "-translate-x-1/2 font-sans text-[10px]",
-            "uppercase tracking-luxe text-muted-foreground"
+            "uppercase tracking-luxe text-muted-foreground",
           )}
           style={{ opacity: 1 }}
         >
