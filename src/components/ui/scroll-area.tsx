@@ -126,6 +126,7 @@ export function ScrollHero({
   }, [src]);
 
   const totalStages = stages.length;
+  const isFinished = progress >= 0.995;
   const activeStage =
     totalStages > 0 ? Math.min(totalStages - 1, Math.floor(progress * totalStages)) : 0;
 
@@ -141,17 +142,30 @@ export function ScrollHero({
             preload="auto"
             className="h-full w-full object-cover"
           />
-          <div className="absolute inset-0 bg-gradient-to-t from-background via-background/10 to-transparent md:bg-gradient-to-r md:from-background md:via-transparent" />
+          <div
+            className={cn(
+              "absolute inset-0 transition-opacity duration-500 bg-gradient-to-t from-background via-background/10 to-transparent md:bg-gradient-to-r md:from-background md:via-transparent",
+              isFinished ? "opacity-30 md:opacity-0" : "opacity-100"
+            )}
+          />
         </div>
 
-        <div className="relative z-10 flex h-full flex-col justify-end px-6 pb-24 md:w-1/2 md:justify-center md:px-16">
+        <div
+          aria-hidden={isFinished}
+          className={cn(
+            "relative z-10 flex h-full flex-col justify-end px-6 pb-24 transition-all duration-500 md:w-1/2 md:justify-center md:px-16",
+            isFinished
+              ? "pointer-events-none -translate-y-6 opacity-0"
+              : "pointer-events-auto translate-y-0 opacity-100"
+          )}
+        >
           <p className="mb-6 font-sans text-xs uppercase tracking-luxe text-gold">
             Clínica BioBella
           </p>
 
           <div className="relative min-h-[14rem] md:min-h-[16rem]">
             {stages.map((s, i) => {
-              const isActive = activeStage === i;
+              const isActive = !isFinished && activeStage === i;
               return (
                 <div
                   key={s.n}
@@ -197,7 +211,7 @@ export function ScrollHero({
 
         <div
           className="absolute bottom-6 left-1/2 z-10 -translate-x-1/2 font-sans text-[10px] uppercase tracking-luxe text-muted-foreground"
-          style={{ opacity: Math.max(0, 1 - progress * 4) }}
+          style={{ opacity: isFinished ? 0 : Math.max(0, 1 - progress * 4) }}
         >
           Role para descobrir
         </div>
